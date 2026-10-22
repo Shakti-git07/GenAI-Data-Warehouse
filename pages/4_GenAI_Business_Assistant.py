@@ -1,17 +1,18 @@
 
 import os
 import json
-
 import pandas as pd
 import streamlit as st
 from dotenv import load_dotenv
-from google import genai
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL
+
+try:
+    from google import genai
+except ImportError:
+    genai = None
 
 
 # ==================================================
-# 1. PAGE CONFIGURATION
+# 1. CONFIGURATION
 # ==================================================
 
 st.set_page_config(
@@ -24,389 +25,316 @@ PROJECT_FOLDER = os.path.dirname(
     os.path.dirname(os.path.abspath(__file__))
 )
 
+CSV_PATH = os.path.join(
+    PROJECT_FOLDER, "data", "Superstore_Prepared.csv"
+)
+
 load_dotenv(os.path.join(PROJECT_FOLDER, ".env"))
 
 
+def get_api_key():
+    try:
+        if "GEMINI_API_KEY" in st.secrets:
+            return st.secrets["GEMINI_API_KEY"]
+    except Exception:
+        pass
+
+    return os.getenv("GEMINI_API_KEY", "")
+
+
 # ==================================================
-# 2. BLACK + BLUE/PURPLE THEME
+# 2. THEME
 # ==================================================
 
 st.markdown("""
 <style>
-    .stApp {
-        background: #000000;
-        color: #F5F5F7;
-    }
-
-    [data-testid="stHeader"],
-    [data-testid="stToolbar"] {
-        background: #000000;
-    }
-
-    [data-testid="stSidebar"] {
-        background: #08080D;
-        border-right: 1px solid #292943;
-    }
-
-    [data-testid="stSidebar"] * {
-        color: #E5E7EB;
-    }
-
-    h1 {
-        color: #FFFFFF !important;
-        font-weight: 750 !important;
-    }
-
-    h2, h3 {
-        color: #C4B5FD !important;
-        font-weight: 650 !important;
-    }
-
-    p, label, .stMarkdown, .stCaption {
-        color: #D1D5DB;
-    }
-
-    [data-testid="stMetric"] {
-        background: linear-gradient(
-            135deg, #10101A, #171329
-        );
-        border: 1px solid #30264F;
-        border-radius: 12px;
-        padding: 18px 16px;
-    }
-
-    [data-testid="stMetricLabel"] {
-        color: #A5B4FC !important;
-    }
-
-    [data-testid="stMetricValue"] {
-        color: #FFFFFF !important;
-        font-weight: 750;
-    }
-
-    [data-testid="stExpander"] {
-        background: #09090F;
-        border: 1px solid #30264F;
-        border-radius: 10px;
-    }
-
-    [data-testid="stTabs"] button {
-        color: #C4B5FD;
-    }
-
-    [data-testid="stTabs"] button[aria-selected="true"] {
-        color: #A5B4FC;
-        border-bottom-color: #8B5CF6;
-    }
-
-    [data-testid="stDataFrame"] {
-        border: 1px solid #292943;
-        border-radius: 10px;
-        overflow: hidden;
-    }
-
-    [data-testid="stTextArea"] textarea,
-    [data-testid="stTextInput"] input {
-        background: #10101A;
-        color: #FFFFFF;
-        border: 1px solid #393052;
-        border-radius: 8px;
-    }
-
-    [data-testid="stSelectbox"] > div > div {
-        background: #10101A;
-        color: #FFFFFF;
-        border-color: #393052;
-    }
-
-    [data-testid="stForm"] {
-        background: #09090F;
-        border: 1px solid #292943;
-        border-radius: 12px;
-        padding: 18px;
-    }
-
-    [data-testid="stFormSubmitButton"] button {
-        background: linear-gradient(
-            90deg, #4F46E5, #7C3AED
-        );
-        color: #FFFFFF;
-        border: none;
-        border-radius: 8px;
-        font-weight: 650;
-    }
-
-    [data-testid="stFormSubmitButton"] button:hover {
-        background: linear-gradient(
-            90deg, #6366F1, #8B5CF6
-        );
-        color: #FFFFFF;
-        border: none;
-    }
-
-    [data-testid="stAlert"] {
-        border-radius: 10px;
-    }
-
-    hr {
-        border-color: #292943 !important;
-    }
+.stApp { background:#000000; color:#F5F5F7; }
+[data-testid="stHeader"], [data-testid="stToolbar"] {
+    background:#000000;
+}
+[data-testid="stSidebar"] {
+    background:#08080D;
+    border-right:1px solid #292943;
+}
+h1 { color:#FFFFFF !important; }
+h2, h3 { color:#C4B5FD !important; }
+p, label { color:#D1D5DB; }
+[data-testid="stMetric"] {
+    background:linear-gradient(135deg,#10101A,#171329);
+    border:1px solid #30264F;
+    border-radius:12px;
+    padding:18px;
+}
+[data-testid="stMetricLabel"] { color:#A5B4FC !important; }
+[data-testid="stMetricValue"] { color:#FFFFFF !important; }
+[data-testid="stDataFrame"] {
+    border:1px solid #292943;
+    border-radius:10px;
+}
+[data-testid="stForm"] {
+    background:#09090F;
+    border:1px solid #292943;
+    border-radius:12px;
+    padding:18px;
+}
+hr { border-color:#292943 !important; }
 </style>
 """, unsafe_allow_html=True)
 
 
 # ==================================================
-# 3. PAGE HEADER
-# ==================================================
-
-st.title("🤖 GenAI Business Assistant")
-
-st.caption(
-    "AI-powered business insights using the Enterprise Data Warehouse"
-)
-
-
-# ==================================================
-# 4. DATABASE CONNECTION
-# ==================================================
-
-@st.cache_resource
-def get_engine():
-    connection_url = URL.create(
-        drivername="mysql+pymysql",
-        username=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DB_PORT", "3306")),
-        database=os.getenv(
-            "DB_NAME",
-            "genai_data_warehouse"
-        )
-    )
-
-    return create_engine(
-        connection_url,
-        pool_pre_ping=True
-    )
-
-
-# ==================================================
-# 5. GEMINI CLIENT
-# ==================================================
-
-def get_gemini_client():
-    api_key = os.getenv("GEMINI_API_KEY")
-
-    if not api_key:
-        raise ValueError(
-            "Gemini API key was not found. "
-            "Please check the .env file."
-        )
-
-    return genai.Client(api_key=api_key)
-
-
-# ==================================================
-# 6. LOAD BUSINESS DATA FROM MYSQL
+# 3. DATA LOADING
 # ==================================================
 
 @st.cache_data(ttl=60)
 def load_business_data():
-    engine = get_engine()
+    if not os.path.exists(CSV_PATH):
+        raise FileNotFoundError(
+            "data/Superstore_Prepared.csv not found in the repository."
+        )
 
-    queries = {
-        "overall": """
-            SELECT
-                COUNT(*) AS sales_records,
-                COUNT(DISTINCT order_id) AS unique_orders,
-                ROUND(SUM(sales), 2) AS total_sales,
-                ROUND(SUM(profit), 2) AS total_profit,
-                SUM(quantity) AS total_quantity,
-                ROUND(AVG(discount), 4) AS average_discount
-            FROM Fact_Sales
-        """,
+    df = pd.read_csv(CSV_PATH)
 
-        "category": """
-            SELECT
-                p.category,
-                ROUND(SUM(f.sales), 2) AS total_sales,
-                ROUND(SUM(f.profit), 2) AS total_profit,
-                SUM(f.quantity) AS total_quantity
-            FROM Fact_Sales f
-            JOIN Dim_Product p
-                ON f.product_key = p.product_key
-            GROUP BY p.category
-            ORDER BY total_profit DESC
-        """,
+    required = [
+        "Order ID", "Order Date", "Customer ID",
+        "Product ID", "Product Name", "Category",
+        "Sub-Category", "Region", "Sales", "Profit",
+        "Quantity", "Discount"
+    ]
 
-        "subcategory": """
-            SELECT
-                p.category,
-                p.sub_category,
-                ROUND(SUM(f.sales), 2) AS total_sales,
-                ROUND(SUM(f.profit), 2) AS total_profit,
-                SUM(f.quantity) AS total_quantity
-            FROM Fact_Sales f
-            JOIN Dim_Product p
-                ON f.product_key = p.product_key
-            GROUP BY p.category, p.sub_category
-            ORDER BY total_profit DESC
-        """,
+    missing = [c for c in required if c not in df.columns]
 
-        "region": """
-            SELECT
-                l.region,
-                ROUND(SUM(f.sales), 2) AS total_sales,
-                ROUND(SUM(f.profit), 2) AS total_profit
-            FROM Fact_Sales f
-            JOIN Dim_Location l
-                ON f.location_key = l.location_key
-            GROUP BY l.region
-            ORDER BY total_profit DESC
-        """,
+    if missing:
+        raise ValueError(
+            "Missing columns in CSV: " + ", ".join(missing)
+        )
 
-        "monthly": """
-            SELECT
-                d.year,
-                d.month,
-                ROUND(SUM(f.sales), 2) AS total_sales,
-                ROUND(SUM(f.profit), 2) AS total_profit
-            FROM Fact_Sales f
-            JOIN Dim_Date d
-                ON f.order_date_key = d.date_key
-            GROUP BY d.year, d.month
-            ORDER BY d.year, d.month
-        """,
+    df["Order Date"] = pd.to_datetime(
+        df["Order Date"], errors="coerce"
+    )
 
-        "products": """
-            SELECT
-                p.product_name,
-                p.category,
-                p.sub_category,
-                ROUND(SUM(f.sales), 2) AS total_sales,
-                ROUND(SUM(f.profit), 2) AS total_profit
-            FROM Fact_Sales f
-            JOIN Dim_Product p
-                ON f.product_key = p.product_key
-            GROUP BY
-                p.product_name,
-                p.category,
-                p.sub_category
-            ORDER BY total_profit DESC
-        """
+    for col in ["Sales", "Profit", "Quantity", "Discount"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(
+        subset=["Order ID", "Order Date", "Sales", "Profit"]
+    ).copy()
+
+    overall = pd.DataFrame([{
+        "sales_records": len(df),
+        "unique_orders": df["Order ID"].nunique(),
+        "total_sales": df["Sales"].sum(),
+        "total_profit": df["Profit"].sum(),
+        "total_quantity": df["Quantity"].sum(),
+        "average_discount": df["Discount"].mean()
+    }])
+
+    category = (
+        df.groupby("Category", as_index=False)
+        .agg(
+            total_sales=("Sales", "sum"),
+            total_profit=("Profit", "sum"),
+            total_quantity=("Quantity", "sum")
+        )
+        .rename(columns={"Category": "category"})
+        .sort_values("total_profit", ascending=False)
+    )
+
+    subcategory = (
+        df.groupby(["Category", "Sub-Category"], as_index=False)
+        .agg(
+            total_sales=("Sales", "sum"),
+            total_profit=("Profit", "sum"),
+            total_quantity=("Quantity", "sum")
+        )
+        .rename(columns={
+            "Category": "category",
+            "Sub-Category": "sub_category"
+        })
+        .sort_values("total_profit", ascending=False)
+    )
+
+    region = (
+        df.groupby("Region", as_index=False)
+        .agg(
+            total_sales=("Sales", "sum"),
+            total_profit=("Profit", "sum")
+        )
+        .rename(columns={"Region": "region"})
+        .sort_values("total_profit", ascending=False)
+    )
+
+    monthly = (
+        df.assign(
+            year=df["Order Date"].dt.year,
+            month=df["Order Date"].dt.month
+        )
+        .groupby(["year", "month"], as_index=False)
+        .agg(
+            total_sales=("Sales", "sum"),
+            total_profit=("Profit", "sum")
+        )
+        .sort_values(["year", "month"])
+    )
+
+    products = (
+        df.groupby(
+            ["Product Name", "Category", "Sub-Category"],
+            as_index=False
+        )
+        .agg(
+            total_sales=("Sales", "sum"),
+            total_profit=("Profit", "sum")
+        )
+        .rename(columns={
+            "Product Name": "product_name",
+            "Category": "category",
+            "Sub-Category": "sub_category"
+        })
+        .sort_values("total_profit", ascending=False)
+    )
+
+    # Customer segmentation using total customer sales.
+    customer = (
+        df.groupby(["Customer ID"], as_index=False)
+        .agg(
+            total_sales=("Sales", "sum"),
+            total_profit=("Profit", "sum"),
+            total_orders=("Order ID", "nunique")
+        )
+    )
+
+    low_cut = customer["total_sales"].quantile(1 / 3)
+    high_cut = customer["total_sales"].quantile(2 / 3)
+
+    customer["segment"] = customer["total_sales"].apply(
+        lambda x: (
+            "Low Sales" if x <= low_cut
+            else "Medium Sales" if x <= high_cut
+            else "High Sales"
+        )
+    )
+
+    segments = (
+        customer.groupby("segment", as_index=False)
+        .agg(
+            customers=("Customer ID", "nunique"),
+            average_orders=("total_orders", "mean"),
+            average_sales=("total_sales", "mean"),
+            average_profit=("total_profit", "mean")
+        )
+    )
+
+    segment_order = ["High Sales", "Medium Sales", "Low Sales"]
+    segments["segment"] = pd.Categorical(
+        segments["segment"],
+        categories=segment_order,
+        ordered=True
+    )
+    segments = segments.sort_values("segment")
+    segments["segment"] = segments["segment"].astype(str)
+
+    return {
+        "raw": df,
+        "overall": overall,
+        "category": category,
+        "subcategory": subcategory,
+        "region": region,
+        "monthly": monthly,
+        "products": products,
+        "segments": segments
     }
 
-    data = {}
 
-    with engine.connect() as connection:
-        for name, query in queries.items():
-            data[name] = pd.read_sql(
-                text(query),
-                connection
-            )
+# ==================================================
+# 4. GEMINI CLIENT
+# ==================================================
 
-    return data
+def generate_ai_answer(question, context):
+    api_key = get_api_key()
+
+    if not api_key:
+        return None, (
+            "Gemini API key is not configured. Add "
+            "GEMINI_API_KEY to Streamlit Cloud → Settings → Secrets, "
+            "or to your local .env file."
+        )
+
+    if genai is None:
+        return None, (
+            "The google-genai package is not installed. "
+            "Add google-genai to requirements.txt."
+        )
+
+    client = genai.Client(api_key=api_key)
+
+    prompt = f"""
+You are an AI Business Analytics Assistant.
+
+Answer the question using only the supplied Superstore business data.
+Do not invent numbers. Clearly distinguish sales and profit.
+Format currency in USD. Negative profit means a loss.
+Use readable Markdown and provide practical, data-supported insights.
+If the data does not answer the question, say so.
+
+BUSINESS DATA:
+{json.dumps(context, indent=2, default=str)}
+
+USER QUESTION:
+{question}
+"""
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    )
+
+    return response.text, None
 
 
 # ==================================================
-# 7. CUSTOMER SEGMENTATION RESULTS
+# 5. PAGE HEADER
 # ==================================================
 
-CUSTOMER_SEGMENTATION = [
-    {
-        "segment": "High Sales",
-        "customers": 59,
-        "average_orders": 8.27,
-        "average_sales": 9370.80,
-        "average_profit": 2213.02
-    },
-    {
-        "segment": "Medium Sales",
-        "customers": 324,
-        "average_orders": 8.34,
-        "average_sales": 3461.22,
-        "average_profit": 368.91
-    },
-    {
-        "segment": "Low Sales",
-        "customers": 410,
-        "average_orders": 4.43,
-        "average_sales": 1519.24,
-        "average_profit": 88.54
-    }
-]
+st.title("🤖 GenAI Business Assistant")
+st.caption(
+    "AI-powered business insights using the prepared enterprise dataset"
+)
 
 
 # ==================================================
-# 8. LOAD AND DISPLAY WAREHOUSE SUMMARY
+# 6. LOAD AND DISPLAY SUMMARY
 # ==================================================
 
 try:
     business_data = load_business_data()
-    overall = business_data["overall"].iloc[0]
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    total_sales = overall["total_sales"]
-    total_profit = overall["total_profit"]
-
-    col1.metric(
-        "Total Sales",
-        (
-            f"${total_sales:,.2f}"
-            if pd.notna(total_sales)
-            else "N/A"
-        )
-    )
-
-    col2.metric(
-        "Total Profit",
-        (
-            f"${total_profit:,.2f}"
-            if pd.notna(total_profit)
-            else "N/A"
-        )
-    )
-
-    col3.metric(
-        "Unique Orders",
-        f"{int(overall['unique_orders']):,}"
-    )
-
-    col4.metric(
-        "Sales Records",
-        f"{int(overall['sales_records']):,}"
-    )
-
 except Exception as error:
-    st.error(
-        "Unable to connect to the Data Warehouse. "
-        "Please check the MySQL service and database configuration."
-    )
+    st.error("Unable to load the business dataset.")
     st.exception(error)
     st.stop()
 
+overall = business_data["overall"].iloc[0]
+
+c1, c2, c3, c4 = st.columns(4)
+
+c1.metric("Total Sales", f"${overall['total_sales']:,.2f}")
+c2.metric("Total Profit", f"${overall['total_profit']:,.2f}")
+c3.metric("Unique Orders", f"{int(overall['unique_orders']):,}")
+c4.metric("Sales Records", f"{int(overall['sales_records']):,}")
+
 
 # ==================================================
-# 9. BUSINESS DATA PREVIEW
+# 7. EXPLORE BUSINESS DATA
 # ==================================================
 
+st.divider()
 st.subheader("📊 Explore Business Data")
 
-with st.expander(
-    "Explore Business Data",
-    expanded=False
-):
-
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        [
-            "Categories",
-            "Sub-Categories",
-            "Regions",
-            "Products",
-            "Customer Segments"
-        ]
-    )
+with st.expander("Explore Business Data", expanded=False):
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Categories", "Sub-Categories", "Regions",
+        "Products", "Customer Segments"
+    ])
 
     with tab1:
         st.dataframe(
@@ -438,53 +366,28 @@ with st.expander(
 
     with tab5:
         st.dataframe(
-            pd.DataFrame(CUSTOMER_SEGMENTATION),
+            business_data["segments"].round(2),
             use_container_width=True,
-            hide_index=True,
-            column_config={
-                "segment": "Customer Segment",
-                "customers": st.column_config.NumberColumn(
-                    "Number of Customers",
-                    format="%d"
-                ),
-                "average_orders": st.column_config.NumberColumn(
-                    "Average Orders",
-                    format="%.2f"
-                ),
-                "average_sales": st.column_config.NumberColumn(
-                    "Average Sales",
-                    format="$%.2f"
-                ),
-                "average_profit": st.column_config.NumberColumn(
-                    "Average Profit",
-                    format="$%.2f"
-                )
-            }
+            hide_index=True
         )
 
 
 # ==================================================
-# 10. BUSINESS QUESTION SUGGESTIONS
+# 8. SUGGESTED QUESTIONS
 # ==================================================
 
 st.divider()
-
 st.subheader("💡 Ask Your Business Question")
-
-st.write(
-    "Ask questions about sales, profit, products, categories, "
-    "regions, monthly trends, or customer segmentation."
-)
 
 suggested_questions = [
     "Which category generates the highest profit?",
     "Which region has the highest sales?",
     "Which products are making losses?",
-    "Summarize the overall business performance.",
+    "Summarize overall business performance.",
     "What are the monthly sales trends?",
     "Which sub-categories generate the lowest profit?",
-    "Identify the 5 most loss-making products. Include each product name and exact total profit from the warehouse data.",
-    "Explain the customer segmentation results.",
+    "List the 5 most loss-making products with exact profit.",
+    "Explain customer segmentation results.",
     "Which customer segment has the highest average sales and profit?",
     "Compare High Sales, Medium Sales and Low Sales customers."
 ]
@@ -495,7 +398,6 @@ selected_question = st.selectbox(
 )
 
 with st.form("business_question_form"):
-
     user_question = st.text_area(
         "Enter your question",
         value=(
@@ -503,9 +405,7 @@ with st.form("business_question_form"):
             if selected_question != "Select a question..."
             else ""
         ),
-        placeholder=(
-            "Example: Which category generates the highest profit?"
-        ),
+        placeholder="Example: Which category generates the highest profit?",
         height=100
     )
 
@@ -517,253 +417,91 @@ with st.form("business_question_form"):
 
 
 # ==================================================
-# 11. GENERATE AI INSIGHTS
+# 9. AI ANSWER
 # ==================================================
 
 if submitted:
-
     if not user_question.strip():
         st.warning("Please enter a business question.")
-
     else:
-        try:
-            client = get_gemini_client()
+        df_products = business_data["products"]
 
-            products = business_data["products"]
+        loss_products = (
+            df_products[df_products["total_profit"] < 0]
+            .sort_values("total_profit")
+            .head(10)
+        )
 
-            loss_making_products = (
-                products.loc[
-                    products["total_profit"] < 0
-                ]
-                .sort_values(
-                    by="total_profit",
-                    ascending=True
-                )
-                .head(10)
+        top_products = (
+            df_products[df_products["total_profit"] > 0]
+            .sort_values("total_profit", ascending=False)
+            .head(10)
+        )
+
+        context = {
+            "overall": business_data["overall"].to_dict("records"),
+            "category": business_data["category"].to_dict("records"),
+            "subcategory": business_data["subcategory"].to_dict("records"),
+            "region": business_data["region"].to_dict("records"),
+            "monthly_last_24": business_data["monthly"].tail(24).to_dict("records"),
+            "top_profitable_products": top_products.to_dict("records"),
+            "loss_making_products": loss_products.to_dict("records"),
+            "customer_segmentation": business_data["segments"].to_dict("records")
+        }
+
+        with st.expander("📉 View Verified Loss-Making Products"):
+            st.dataframe(
+                loss_products,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "total_sales": st.column_config.NumberColumn(
+                        "Total Sales", format="$%.2f"
+                    ),
+                    "total_profit": st.column_config.NumberColumn(
+                        "Total Profit", format="$%.2f"
+                    )
+                }
             )
 
-            profitable_products = (
-                products.loc[
-                    products["total_profit"] > 0
-                ]
-                .sort_values(
-                    by="total_profit",
-                    ascending=False
-                )
-                .head(10)
-            )
-
-            # Display verified loss-making products.
-
-            with st.expander(
-                "📉 View Verified Loss-Making Products",
-                expanded=False
-            ):
-                st.caption(
-                    "These figures are calculated from the MySQL Data Warehouse."
+        with st.spinner("🤖 Analyzing business data..."):
+            try:
+                answer, error_message = generate_ai_answer(
+                    user_question,
+                    context
                 )
 
-                st.dataframe(
-                    loss_making_products[
-                        [
-                            "product_name",
-                            "category",
-                            "sub_category",
-                            "total_sales",
-                            "total_profit"
-                        ]
-                    ],
-                    use_container_width=True,
-                    hide_index=True,
-                    column_config={
-                        "product_name": "Product",
-                        "category": "Category",
-                        "sub_category": "Sub-Category",
-                        "total_sales": st.column_config.NumberColumn(
-                            "Total Sales",
-                            format="$%.2f"
-                        ),
-                        "total_profit": st.column_config.NumberColumn(
-                            "Total Profit",
-                            format="$%.2f"
-                        )
-                    }
-                )
+                if error_message:
+                    st.warning(error_message)
+                elif answer:
+                    st.divider()
+                    st.subheader("✨ AI-Generated Business Insights")
+                    st.markdown(answer)
+                else:
+                    st.warning("The AI model returned an empty response.")
 
-            # Prepare business data for Gemini.
+            except Exception as error:
+                message = str(error).lower()
 
-            context = {
-                "overall_business_summary":
-                    business_data["overall"].to_dict(
-                        orient="records"
-                    ),
-
-                "category_performance":
-                    business_data["category"].to_dict(
-                        orient="records"
-                    ),
-
-                "subcategory_performance":
-                    business_data["subcategory"].to_dict(
-                        orient="records"
-                    ),
-
-                "regional_performance":
-                    business_data["region"].to_dict(
-                        orient="records"
-                    ),
-
-                "monthly_performance":
-                    business_data["monthly"].tail(24).to_dict(
-                        orient="records"
-                    ),
-
-                "top_10_profitable_products":
-                    profitable_products.to_dict(
-                        orient="records"
-                    ),
-
-                "top_10_loss_making_products":
-                    loss_making_products.to_dict(
-                        orient="records"
-                    ),
-
-                "customer_segmentation":
-                    CUSTOMER_SEGMENTATION
-            }
-
-            business_context = json.dumps(
-                context,
-                indent=2,
-                default=str
-            )
-
-            prompt = f"""
-You are an AI Business Analytics Assistant.
-
-Answer the user's question using only the business data
-provided below.
-
-RULES:
-
-1. Use the supplied warehouse data as the source of truth.
-2. Do not invent figures, records, or business facts.
-3. If the data does not answer a question, explain the limitation.
-4. Clearly distinguish sales from profit.
-5. Format monetary values in US dollars.
-6. Provide a clear answer followed by useful business insights.
-7. Keep the response professional and easy to understand.
-8. Treat negative profit as a loss.
-9. When discussing loss-making products, rank the largest losses first.
-10. Distinguish observed results from possible explanations.
-11. Do not execute SQL or request database credentials.
-12. Format monetary values clearly, for example $145,455.66.
-13. Copy product sales and profit figures exactly from the supplied data.
-14. Never estimate or change a supplied product figure.
-15. For loss-making products, show the exact negative profit value.
-16. Do not combine, repeat, or corrupt numbers or currency symbols.
-17. If a value is unavailable, state that it is unavailable.
-18. Keep tables and bullet points readable and correctly formatted.
-19. Customer segmentation data is provided under
-    "customer_segmentation".
-20. When asked about customer segments, use those supplied values.
-21. Do not claim that customer segmentation data is unavailable
-    when it is present in the supplied context.
-22. The customer counts are:
-    High Sales: 59,
-    Medium Sales: 324,
-    Low Sales: 410.
-23. Average sales and average profit are different metrics.
-    Never confuse them.
-24. Explain the customer segment comparison using the exact
-    supplied values.
-25. Do not claim a cause for a business result unless the data
-    supports it.
-26. Use readable Markdown tables when comparisons are helpful.
-
-BUSINESS DATA:
-
-{business_context}
-
-USER QUESTION:
-
-{user_question}
-"""
-
-            with st.spinner(
-                "🤖 Analyzing business data..."
-            ):
-
-                response = client.models.generate_content(
-                    model="gemini-3.5-flash-lite",
-                    contents=prompt
-                )
-
-            if response.text and response.text.strip():
-
-                st.divider()
-
-                st.subheader(
-                    "✨ AI-Generated Business Insights"
-                )
-
-                # Display AI response as readable Markdown.
-                st.markdown(response.text)
-
-                st.caption(
-                    "Generated using Gemini and data retrieved "
-                    "from the MySQL Data Warehouse."
-                )
-
-            else:
-                st.warning(
-                    "The AI model returned an empty response. "
-                    "Please try again."
-                )
-
-        except Exception as error:
-
-            error_message = str(error).lower()
-
-            if (
-                "429" in error_message
-                or "resource_exhausted" in error_message
-                or "quota" in error_message
-            ):
-                st.warning(
-                    "The AI service is temporarily rate-limited "
-                    "or its available quota has been reached. "
-                    "Please check your Gemini API usage and try again later."
-                )
-
-            elif (
-                "api key" in error_message
-                or "401" in error_message
-                or "403" in error_message
-                or "unauthenticated" in error_message
-            ):
-                st.error(
-                    "The AI service could not authenticate the request. "
-                    "Please check the API key configuration in the .env file."
-                )
-
-            else:
-                st.error(
-                    "Unable to generate business insights. "
-                    "Please check the connection and try again."
-                )
-
-                st.caption(
-                    f"Technical details: {error}"
-                )
+                if "429" in message or "quota" in message:
+                    st.warning(
+                        "Gemini API quota/rate limit reached. "
+                        "Check your API usage and try again later."
+                    )
+                elif "api key" in message or "401" in message or "403" in message:
+                    st.error(
+                        "Gemini authentication failed. Check your API key."
+                    )
+                else:
+                    st.error("Unable to generate AI insights.")
+                    st.caption(f"Technical details: {error}")
 
 
 # ==================================================
-# 12. FOOTER
+# 10. FOOTER
 # ==================================================
 
 st.divider()
-
 st.caption(
     "GenAI-Ready Enterprise Data Warehouse | "
     "AI-Powered Business Decision Support"

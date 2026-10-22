@@ -1,12 +1,8 @@
+
 import os
 import pandas as pd
 import streamlit as st
 import plotly.express as px
-
-from sqlalchemy import create_engine, text
-from sqlalchemy.engine import URL
-from dotenv import load_dotenv
-
 
 # ==================================================
 # 1. PAGE CONFIGURATION
@@ -17,9 +13,6 @@ st.set_page_config(
     page_icon="📈",
     layout="wide"
 )
-
-load_dotenv()
-
 
 # ==================================================
 # 2. DARK THEME
@@ -33,21 +26,9 @@ st.markdown(
         color: #F5F7FA;
     }
 
-    [data-testid="stHeader"] {
-        background-color: #000000 !important;
-    }
-
-    [data-testid="stToolbar"] {
-        background-color: #000000 !important;
-    }
-
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"],
     [data-testid="stDecoration"] {
-        background: #000000 !important;
-        background-image: none !important;
-    }
-
-    header,
-    [data-testid="stHeader"] > div {
         background-color: #000000 !important;
     }
 
@@ -105,10 +86,6 @@ st.markdown(
         border-radius: 8px;
     }
 
-    [data-testid="stSelectbox"] {
-        color: #F5F7FA;
-    }
-
     hr {
         border-color: #292932 !important;
     }
@@ -123,17 +100,14 @@ st.markdown(
 
 
 # ==================================================
-# 3. PLOTLY DARK THEME HELPER
+# 3. HELPER FUNCTIONS
 # ==================================================
 
 def apply_dark_chart_theme(fig):
     fig.update_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(
-            color="#E6E8EF",
-            family="Arial"
-        ),
+        font=dict(color="#E6E8EF", family="Arial"),
         title_font=dict(color="#F5F7FA"),
         legend_title_font=dict(color="#E6E8EF"),
         margin=dict(l=20, r=20, t=60, b=20)
@@ -152,6 +126,85 @@ def apply_dark_chart_theme(fig):
     return fig
 
 
+PROJECT_FOLDER = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+
+CSV_PATH = os.path.join(
+    PROJECT_FOLDER,
+    "data",
+    "Superstore_Prepared.csv"
+)
+
+
+@st.cache_data(ttl=60)
+def load_product_profitability():
+    if not os.path.exists(CSV_PATH):
+        raise FileNotFoundError(
+            "data/Superstore_Prepared.csv was not found."
+        )
+
+    df = pd.read_csv(CSV_PATH)
+
+    df = df.rename(columns={
+        "Product Name": "product_name",
+        "Category": "category",
+        "Sub-Category": "sub_category",
+        "Sales": "total_sales",
+        "Profit": "total_profit",
+        "Quantity": "total_quantity"
+    })
+
+    required = [
+        "product_name",
+        "category",
+        "sub_category",
+        "total_sales",
+        "total_profit",
+        "total_quantity"
+    ]
+
+    missing = [col for col in required if col not in df.columns]
+
+    if missing:
+        raise ValueError(
+            "CSV columns missing: " + ", ".join(missing)
+        )
+
+    for col in ["total_sales", "total_profit", "total_quantity"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    df = df.dropna(subset=required)
+
+    result = (
+        df.groupby(
+            ["product_name", "category", "sub_category"],
+            as_index=False
+        )
+        .agg(
+            total_sales=("total_sales", "sum"),
+            total_profit=("total_profit", "sum"),
+            total_quantity=("total_quantity", "sum")
+        )
+        .sort_values("total_profit", ascending=False)
+    )
+
+    return result
+
+
+@st.cache_data(ttl=60)
+def load_customer_segments():
+    csv_path = os.path.join(
+        PROJECT_FOLDER,
+        "customer_segments.csv"
+    )
+
+    if not os.path.exists(csv_path):
+        return pd.DataFrame()
+
+    return pd.read_csv(csv_path)
+
+
 # ==================================================
 # 4. PAGE TITLE
 # ==================================================
@@ -164,111 +217,114 @@ st.caption("Customer Segmentation and Business Intelligence")
 # 5. CUSTOMER SEGMENTATION
 # ==================================================
 
-project_folder = os.path.dirname(
-    os.path.dirname(os.path.abspath(__file__))
-)
+st.header("Customer Segmentation")
 
-csv_path = os.path.join(
-    project_folder,
-    "customer_segments.csv"
-)
+customers = load_customer_segments()
 
-if os.path.exists(csv_path):
-    customers = pd.read_csv(csv_path)
+if not customers.empty:
+    required_customer_cols = [
+        "customer_id",
+        "segment",
+        "total_sales",
+        "total_profit"
+    ]
 
-    st.subheader("Customer Segmentation")
+    missing = [
+        col for col in required_customer_cols
+        if col not in customers.columns
+    ]
 
-    summary = (
-        customers.groupby("segment", as_index=False)
-        .agg(
-            customer_count=("customer_id", "nunique"),
-            average_sales=("total_sales", "mean"),
-            average_profit=("total_profit", "mean")
+    if missing:
+        st.warning(
+            "Customer segmentation file is missing columns: "
+            + ", ".join(missing)
         )
-    )
+    else:
+        summary = (
+            customers.groupby("segment", as_index=False)
+            .agg(
+                customer_count=("customer_id", "nunique"),
+                average_sales=("total_sales", "mean"),
+                average_profit=("total_profit", "mean")
+            )
+        )
 
-    col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-    with col1:
-        fig_count = px.bar(
+        with col1:
+            fig_count = px.bar(
+                summary,
+                x="segment",
+                y="customer_count",
+                color="segment",
+                title="Customers in Each Segment",
+                labels={
+                    "segment": "Customer Segment",
+                    "customer_count": "Number of Customers"
+                }
+            )
+
+            st.plotly_chart(
+                apply_dark_chart_theme(fig_count),
+                use_container_width=True
+            )
+
+        with col2:
+            fig_sales = px.bar(
+                summary,
+                x="segment",
+                y="average_sales",
+                color="segment",
+                title="Average Sales per Customer",
+                labels={
+                    "segment": "Customer Segment",
+                    "average_sales": "Average Sales (USD)"
+                }
+            )
+
+            st.plotly_chart(
+                apply_dark_chart_theme(fig_sales),
+                use_container_width=True
+            )
+
+        st.subheader("Average Profit by Segment")
+
+        fig_profit = px.bar(
             summary,
             x="segment",
-            y="customer_count",
+            y="average_profit",
             color="segment",
-            title="Customers in Each Segment",
+            title="Average Profit per Customer",
             labels={
                 "segment": "Customer Segment",
-                "customer_count": "Number of Customers"
+                "average_profit": "Average Profit (USD)"
             }
         )
 
-        apply_dark_chart_theme(fig_count)
-
         st.plotly_chart(
-            fig_count,
+            apply_dark_chart_theme(fig_profit),
             use_container_width=True
         )
 
-    with col2:
-        fig_sales = px.bar(
-            summary,
-            x="segment",
-            y="average_sales",
-            color="segment",
-            title="Average Sales per Customer",
-            labels={
-                "segment": "Customer Segment",
-                "average_sales": "Average Sales (USD)"
-            }
-        )
+        st.subheader("Customer Segment Summary")
 
-        apply_dark_chart_theme(fig_sales)
-
-        st.plotly_chart(
-            fig_sales,
-            use_container_width=True
-        )
-
-    st.subheader("Average Profit by Segment")
-
-    fig_profit = px.bar(
-        summary,
-        x="segment",
-        y="average_profit",
-        color="segment",
-        title="Average Profit per Customer",
-        labels={
-            "segment": "Customer Segment",
-            "average_profit": "Average Profit (USD)"
-        }
-    )
-
-    apply_dark_chart_theme(fig_profit)
-
-    st.plotly_chart(
-        fig_profit,
-        use_container_width=True
-    )
-
-    st.subheader("Customer Segment Summary")
-
-    st.dataframe(
-        summary.round(2),
-        use_container_width=True,
-        hide_index=True
-    )
-
-    with st.expander("View Individual Customer Details"):
         st.dataframe(
-            customers,
+            summary.round(2),
             use_container_width=True,
             hide_index=True
         )
 
+        with st.expander("View Individual Customer Details"):
+            st.dataframe(
+                customers,
+                use_container_width=True,
+                hide_index=True
+            )
+
 else:
-    st.warning(
-        "Customer segmentation file not found. "
-        "Run customer_segmentation.py from the project folder first."
+    st.info(
+        "Customer segmentation CSV is not available. "
+        "Product and category analysis can still be viewed below."
     )
 
 
@@ -281,59 +337,15 @@ st.header("Product Profitability & Loss Analysis")
 
 st.write(
     "Identify products that generate the highest profit "
-    "and products that are operating at a loss."
+    "and products that operate at a loss."
 )
-
-
-@st.cache_data(ttl=60)
-def load_product_profitability():
-    connection_url = URL.create(
-        drivername="mysql+pymysql",
-        username=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST", "localhost"),
-        port=int(os.getenv("DB_PORT", "3306")),
-        database=os.getenv("DB_NAME", "genai_data_warehouse")
-    )
-
-    engine = create_engine(
-        connection_url,
-        pool_pre_ping=True
-    )
-
-    query = """
-        SELECT
-            p.product_name,
-            p.category,
-            p.sub_category,
-            SUM(f.sales) AS total_sales,
-            SUM(f.profit) AS total_profit,
-            SUM(f.quantity) AS total_quantity
-        FROM Fact_Sales f
-        JOIN Dim_Product p
-            ON f.product_key = p.product_key
-        GROUP BY
-            p.product_name,
-            p.category,
-            p.sub_category
-        ORDER BY total_profit DESC
-    """
-
-    try:
-        with engine.connect() as connection:
-            result = pd.read_sql(text(query), connection)
-    finally:
-        engine.dispose()
-
-    return result
-
-
-product_df = pd.DataFrame()
 
 try:
     product_df = load_product_profitability()
 
-    if not product_df.empty:
+    if product_df.empty:
+        st.info("No product profitability records found.")
+    else:
         product_df["profit_status"] = product_df["total_profit"].apply(
             lambda profit: "Profitable" if profit >= 0 else "Loss"
         )
@@ -348,20 +360,9 @@ try:
 
         col1, col2, col3 = st.columns(3)
 
-        col1.metric(
-            "Products Analysed",
-            f"{len(product_df):,}"
-        )
-
-        col2.metric(
-            "Profitable Products",
-            f"{len(profitable_products):,}"
-        )
-
-        col3.metric(
-            "Products with Loss",
-            f"{len(loss_products):,}"
-        )
+        col1.metric("Products Analysed", f"{len(product_df):,}")
+        col2.metric("Profitable Products", f"{len(profitable_products):,}")
+        col3.metric("Products with Loss", f"{len(loss_products):,}")
 
         st.subheader("Top 10 Most Profitable Products")
 
@@ -370,7 +371,7 @@ try:
             .sort_values("total_profit", ascending=True)
         )
 
-        fig_top_products = px.bar(
+        fig_top = px.bar(
             top_products,
             x="total_profit",
             y="product_name",
@@ -384,10 +385,8 @@ try:
             color_continuous_scale="Purples"
         )
 
-        apply_dark_chart_theme(fig_top_products)
-
         st.plotly_chart(
-            fig_top_products,
+            apply_dark_chart_theme(fig_top),
             use_container_width=True
         )
 
@@ -399,7 +398,7 @@ try:
                 .sort_values("total_profit", ascending=True)
             )
 
-            fig_loss_products = px.bar(
+            fig_loss = px.bar(
                 worst_products,
                 x="total_profit",
                 y="product_name",
@@ -413,13 +412,10 @@ try:
                 color_continuous_scale="RdBu"
             )
 
-            apply_dark_chart_theme(fig_loss_products)
-
             st.plotly_chart(
-                fig_loss_products,
+                apply_dark_chart_theme(fig_loss),
                 use_container_width=True
             )
-
         else:
             st.success("No loss-making products found.")
 
@@ -427,8 +423,7 @@ try:
 
         selected_category = st.selectbox(
             "Filter by Category",
-            ["All Categories"]
-            + sorted(
+            ["All Categories"] + sorted(
                 product_df["category"].dropna().unique().tolist()
             ),
             key="product_profit_category"
@@ -447,9 +442,6 @@ try:
             hide_index=True
         )
 
-    else:
-        st.info("No product profitability records found.")
-
 except Exception as error:
     st.error("Unable to load product profitability analysis.")
     st.exception(error)
@@ -462,11 +454,7 @@ except Exception as error:
 st.divider()
 st.header("Category-wise Profitability Analysis")
 
-st.write(
-    "Compare total sales and profit across different product categories."
-)
-
-if not product_df.empty:
+if "product_df" in locals() and not product_df.empty:
     category_summary = (
         product_df.groupby("category", as_index=False)
         .agg(
@@ -480,7 +468,7 @@ if not product_df.empty:
     col1, col2 = st.columns(2)
 
     with col1:
-        fig_category_sales = px.bar(
+        fig_cat_sales = px.bar(
             category_summary,
             x="category",
             y="total_sales",
@@ -492,15 +480,13 @@ if not product_df.empty:
             }
         )
 
-        apply_dark_chart_theme(fig_category_sales)
-
         st.plotly_chart(
-            fig_category_sales,
+            apply_dark_chart_theme(fig_cat_sales),
             use_container_width=True
         )
 
     with col2:
-        fig_category_profit = px.bar(
+        fig_cat_profit = px.bar(
             category_summary,
             x="category",
             y="total_profit",
@@ -512,10 +498,8 @@ if not product_df.empty:
             }
         )
 
-        apply_dark_chart_theme(fig_category_profit)
-
         st.plotly_chart(
-            fig_category_profit,
+            apply_dark_chart_theme(fig_cat_profit),
             use_container_width=True
         )
 
@@ -535,12 +519,7 @@ if not product_df.empty:
 st.divider()
 st.header("Sub-category Profit Analysis")
 
-st.write(
-    "Compare sales and profit across product sub-categories "
-    "to identify the strongest and weakest performers."
-)
-
-if not product_df.empty:
+if "product_df" in locals() and not product_df.empty:
     subcategory_summary = (
         product_df.groupby(
             ["category", "sub_category"],
@@ -557,73 +536,60 @@ if not product_df.empty:
     st.subheader("Top 10 Sub-categories by Profit")
 
     top_subcategories = (
-        subcategory_summary
-        .nlargest(10, "total_profit")
+        subcategory_summary.nlargest(10, "total_profit")
         .sort_values("total_profit", ascending=True)
     )
 
-    fig_subcategory_profit = px.bar(
+    fig_sub = px.bar(
         top_subcategories,
         x="total_profit",
         y="sub_category",
         color="category",
         orientation="h",
-        hover_data=["total_sales", "total_quantity"],
         title="Top 10 Sub-categories by Total Profit",
         labels={
             "sub_category": "Sub-category",
             "total_profit": "Total Profit (USD)",
-            "category": "Category",
-            "total_sales": "Total Sales (USD)",
-            "total_quantity": "Quantity Sold"
+            "category": "Category"
         }
     )
 
-    apply_dark_chart_theme(fig_subcategory_profit)
-
     st.plotly_chart(
-        fig_subcategory_profit,
+        apply_dark_chart_theme(fig_sub),
         use_container_width=True
     )
 
     st.subheader("Lowest Performing Sub-categories")
 
     bottom_subcategories = (
-        subcategory_summary
-        .nsmallest(10, "total_profit")
+        subcategory_summary.nsmallest(10, "total_profit")
         .sort_values("total_profit", ascending=True)
     )
 
-    fig_subcategory_loss = px.bar(
+    fig_sub_loss = px.bar(
         bottom_subcategories,
         x="total_profit",
         y="sub_category",
         color="category",
         orientation="h",
-        hover_data=["total_sales", "total_quantity"],
         title="10 Sub-categories with Lowest Profit",
         labels={
             "sub_category": "Sub-category",
             "total_profit": "Total Profit (USD)",
-            "category": "Category",
-            "total_sales": "Total Sales (USD)",
-            "total_quantity": "Quantity Sold"
+            "category": "Category"
         }
     )
 
-    apply_dark_chart_theme(fig_subcategory_loss)
-
     st.plotly_chart(
-        fig_subcategory_loss,
+        apply_dark_chart_theme(fig_sub_loss),
         use_container_width=True
     )
 
     st.subheader("Sub-category Performance Details")
 
-    selected_subcategory_category = st.selectbox(
+    selected_category_sub = st.selectbox(
         "Filter by Product Category",
-        ["All Categories"]
-        + sorted(
+        ["All Categories"] + sorted(
             subcategory_summary["category"].dropna().unique().tolist()
         ),
         key="subcategory_category_filter"
@@ -631,10 +597,9 @@ if not product_df.empty:
 
     subcategory_display = subcategory_summary.copy()
 
-    if selected_subcategory_category != "All Categories":
+    if selected_category_sub != "All Categories":
         subcategory_display = subcategory_display[
-            subcategory_display["category"]
-            == selected_subcategory_category
+            subcategory_display["category"] == selected_category_sub
         ]
 
     st.dataframe(
@@ -642,3 +607,5 @@ if not product_df.empty:
         use_container_width=True,
         hide_index=True
     )
+
+st.caption("Data source: Superstore Prepared CSV Dataset")
