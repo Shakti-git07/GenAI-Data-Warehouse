@@ -1,3 +1,4 @@
+
 import os
 
 import pandas as pd
@@ -28,42 +29,23 @@ load_dotenv()
 st.markdown(
     """
     <style>
-    /* Main application background */
     .stApp {
         background-color: #000000 !important;
         color: #F5F7FA;
     }
 
-    /* Top header */
-    [data-testid="stHeader"] {
-        background-color: #000000 !important;
-    }
-
-    /* Top toolbar */
-    [data-testid="stToolbar"] {
-        background-color: #000000 !important;
-    }
-
-    /* Top decoration strip */
+    [data-testid="stHeader"],
+    [data-testid="stToolbar"],
     [data-testid="stDecoration"] {
-        background: #000000 !important;
-        background-image: none !important;
-    }
-
-    /* Header and toolbar containers */
-    header,
-    [data-testid="stHeader"] > div {
         background-color: #000000 !important;
     }
 
-    /* Main content spacing */
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
         max-width: 1500px;
     }
 
-    /* Sidebar */
     [data-testid="stSidebar"] {
         background-color: #0B0B0F;
         border-right: 1px solid #252532;
@@ -77,19 +59,16 @@ st.markdown(
         color: #F5F7FA;
     }
 
-    /* Main headings */
     h1, h2, h3 {
         color: #F5F7FA !important;
     }
 
-    /* General text */
     .stApp p,
     .stApp label,
     .stApp [data-testid="stCaptionContainer"] {
         color: #B8BFCC;
     }
 
-    /* KPI cards */
     [data-testid="stMetric"] {
         background: linear-gradient(135deg, #111118, #171724);
         border: 1px solid #292941;
@@ -106,7 +85,6 @@ st.markdown(
         color: #F5F7FA !important;
     }
 
-    /* Chart containers */
     [data-testid="stPlotlyChart"] {
         background-color: #0B0B0F;
         border: 1px solid #242432;
@@ -114,14 +92,12 @@ st.markdown(
         padding: 8px;
     }
 
-    /* Expanders */
     [data-testid="stExpander"] {
         background-color: #0D0D12;
         border: 1px solid #292941;
         border-radius: 10px;
     }
 
-    /* Buttons */
     .stButton > button {
         background: linear-gradient(90deg, #4545A5, #6555C8);
         color: #FFFFFF;
@@ -134,24 +110,20 @@ st.markdown(
         color: #FFFFFF;
     }
 
-    /* Dividers */
     hr {
         border-color: #292932 !important;
     }
 
-    /* Data table */
     [data-testid="stDataFrame"] {
         border: 1px solid #292941;
         border-radius: 8px;
     }
 
-    /* Multiselect and select boxes */
     [data-testid="stMultiSelect"],
     [data-testid="stSelectbox"] {
         color: #F5F7FA;
     }
 
-    /* Links */
     .stApp a {
         color: #A9A0FF;
     }
@@ -186,16 +158,18 @@ def get_engine():
 
     return create_engine(
         connection_url,
-        pool_pre_ping=True
+        pool_pre_ping=True,
+        connect_args={"connect_timeout": 5}
     )
 
 
 # ==================================================
-# 5. LOAD DATA FROM DATA WAREHOUSE
+# 5. LOAD DATA FROM MYSQL OR CSV
 # ==================================================
 
 @st.cache_data(ttl=60)
 def load_sales_data():
+
     query = """
         SELECT
             f.row_id,
@@ -227,36 +201,114 @@ def load_sales_data():
             ON f.location_key = l.location_key
     """
 
-    engine = get_engine()
+    # First try MySQL
+    try:
+        engine = get_engine()
 
-    with engine.connect() as connection:
-        df = pd.read_sql(text(query), connection)
+        with engine.connect() as connection:
+            df = pd.read_sql(text(query), connection)
+
+        if not df.empty:
+            df["data_source"] = "MySQL Data Warehouse"
+            return df
+
+    except Exception:
+        pass
+
+    # If MySQL is unavailable, load CSV
+    csv_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        "data",
+        "Superstore_Prepared.csv"
+    )
+
+    if not os.path.exists(csv_path):
+        raise FileNotFoundError(
+            "Superstore_Prepared.csv was not found. "
+            "Please check the data folder and GitHub upload."
+        )
+
+    df = pd.read_csv(csv_path)
+
+    # Match CSV column names to dashboard names
+    df = df.rename(columns={
+        "Row ID": "row_id",
+        "Order ID": "order_id",
+        "Order Date": "order_date",
+        "Ship Mode": "ship_mode",
+        "Category": "category",
+        "Sub-Category": "sub_category",
+        "Product Name": "product_name",
+        "Segment": "segment",
+        "Region": "region",
+        "State": "state",
+        "City": "city",
+        "Sales": "sales",
+        "Profit": "profit",
+        "Quantity": "quantity",
+        "Discount": "discount"
+    })
+
+    required_columns = [
+        "row_id", "order_id", "sales", "profit",
+        "quantity", "discount", "ship_mode", "order_date",
+        "category", "sub_category", "product_name",
+        "segment", "region", "state", "city"
+    ]
+
+    missing_columns = [
+        column for column in required_columns
+        if column not in df.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "Missing columns in CSV: " + ", ".join(missing_columns)
+        )
+
+    df["order_date"] = pd.to_datetime(
+        df["order_date"], errors="coerce"
+    )
+
+    for column in ["sales", "profit", "quantity", "discount"]:
+        df[column] = pd.to_numeric(
+            df[column], errors="coerce"
+        )
+
+    df["order_year"] = df["order_date"].dt.year
+    df["order_month"] = df["order_date"].dt.month
+    df["month_name"] = df["order_date"].dt.month_name()
+
+    df = df.dropna(
+        subset=[
+            "order_date", "sales", "profit",
+            "quantity", "order_id"
+        ]
+    )
+
+    df["data_source"] = "Prepared CSV Dataset"
 
     return df
 
 
 # ==================================================
-# 6. MAIN BUSINESS DASHBOARD
+# 6. MAIN DASHBOARD
 # ==================================================
 
 try:
     df = load_sales_data()
 
     if df.empty:
-        st.warning("No sales records found in the warehouse.")
+        st.warning("No sales records found.")
         st.stop()
 
     df["order_date"] = pd.to_datetime(df["order_date"])
 
-    # --------------------------------------------------
-    # 7. SIDEBAR FILTERS
-    # --------------------------------------------------
-
     st.sidebar.header("Dashboard Filters")
 
-    years = sorted(
-        df["order_year"].dropna().unique().tolist()
-    )
+    years = sorted(df["order_year"].dropna().unique().tolist())
+    categories = sorted(df["category"].dropna().unique().tolist())
+    regions = sorted(df["region"].dropna().unique().tolist())
 
     selected_years = st.sidebar.multiselect(
         "Select Year",
@@ -264,18 +316,10 @@ try:
         default=years
     )
 
-    categories = sorted(
-        df["category"].dropna().unique().tolist()
-    )
-
     selected_categories = st.sidebar.multiselect(
         "Select Category",
         options=categories,
         default=categories
-    )
-
-    regions = sorted(
-        df["region"].dropna().unique().tolist()
     )
 
     selected_regions = st.sidebar.multiselect(
@@ -291,7 +335,7 @@ try:
     ].copy()
 
     # --------------------------------------------------
-    # 8. KEY PERFORMANCE INDICATORS
+    # 7. KEY PERFORMANCE INDICATORS
     # --------------------------------------------------
 
     total_sales = filtered["sales"].sum()
@@ -309,7 +353,7 @@ try:
     st.divider()
 
     # --------------------------------------------------
-    # 9. SALES BY CATEGORY
+    # 8. SALES BY CATEGORY
     # --------------------------------------------------
 
     left, right = st.columns(2)
@@ -343,23 +387,13 @@ try:
             margin=dict(l=20, r=20, t=60, b=20)
         )
 
-        fig_category.update_xaxes(
-            gridcolor="#292932",
-            zerolinecolor="#292932"
-        )
+        fig_category.update_xaxes(gridcolor="#292932")
+        fig_category.update_yaxes(gridcolor="#292932")
 
-        fig_category.update_yaxes(
-            gridcolor="#292932",
-            zerolinecolor="#292932"
-        )
-
-        st.plotly_chart(
-            fig_category,
-            use_container_width=True
-        )
+        st.plotly_chart(fig_category, use_container_width=True)
 
     # --------------------------------------------------
-    # 10. PROFIT BY REGION
+    # 9. PROFIT BY REGION
     # --------------------------------------------------
 
     with right:
@@ -391,23 +425,13 @@ try:
             margin=dict(l=20, r=20, t=60, b=20)
         )
 
-        fig_region.update_xaxes(
-            gridcolor="#292932",
-            zerolinecolor="#292932"
-        )
+        fig_region.update_xaxes(gridcolor="#292932")
+        fig_region.update_yaxes(gridcolor="#292932")
 
-        fig_region.update_yaxes(
-            gridcolor="#292932",
-            zerolinecolor="#292932"
-        )
-
-        st.plotly_chart(
-            fig_region,
-            use_container_width=True
-        )
+        st.plotly_chart(fig_region, use_container_width=True)
 
     # --------------------------------------------------
-    # 11. MONTHLY SALES TREND
+    # 10. MONTHLY SALES TREND
     # --------------------------------------------------
 
     st.subheader("Monthly Sales Trend")
@@ -442,14 +466,10 @@ try:
         fig_monthly.update_xaxes(
             dtick="M3",
             tickformat="%b %Y",
-            gridcolor="#292932",
-            zerolinecolor="#292932"
+            gridcolor="#292932"
         )
 
-        fig_monthly.update_yaxes(
-            gridcolor="#292932",
-            zerolinecolor="#292932"
-        )
+        fig_monthly.update_yaxes(gridcolor="#292932")
 
         fig_monthly.update_layout(
             hovermode="x unified",
@@ -460,19 +480,16 @@ try:
             margin=dict(l=20, r=20, t=60, b=20)
         )
 
-        st.plotly_chart(
-            fig_monthly,
-            use_container_width=True
-        )
+        st.plotly_chart(fig_monthly, use_container_width=True)
 
     else:
         st.info(
             "No sales records match the selected filters. "
-            "Please select at least one year, category and region."
+            "Select at least one year, category and region."
         )
 
     # --------------------------------------------------
-    # 12. VIEW SALES RECORDS
+    # 11. VIEW SALES RECORDS
     # --------------------------------------------------
 
     with st.expander("View Sales Records"):
@@ -485,18 +502,18 @@ try:
         )
 
     # --------------------------------------------------
-    # 13. DATA SOURCE
+    # 12. DATA SOURCE
     # --------------------------------------------------
 
     st.caption(
-        "Data source: MySQL Data Warehouse | "
+        f"Data source: {df['data_source'].iloc[0]} | "
         "Superstore Sales Dataset"
     )
 
 # ==================================================
-# 14. ERROR HANDLING
+# 13. ERROR HANDLING
 # ==================================================
 
-except Exception:
+except Exception as error:
     st.error("Unable to load the dashboard data.")
-    st.exception(Exception)
+    st.exception(error)
